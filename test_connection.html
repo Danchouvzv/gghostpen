@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GhostPen Connection Test</title>
+</head>
+<body>
+    <h1>GhostPen Connection Test</h1>
+    <button onclick="testConnection()">Test Backend Connection</button>
+    <div id="result"></div>
+
+    <script>
+        async function testConnection() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Testing...';
+
+            try {
+                // Test 1: Health check
+                const health = await fetch('http://localhost:8000/api/health');
+                const healthData = await health.json();
+                console.log('Health:', healthData);
+
+                // Test 2: Get authors
+                const authors = await fetch('http://localhost:8000/api/authors');
+                const authorsData = await authors.json();
+                console.log('Authors:', authorsData);
+
+                // Test 3: Generate post
+                const generate = await fetch('http://localhost:8000/api/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        author_id: 'person_01',
+                        social_network: 'linkedin',
+                        topic: 'Тест подключения'
+                    })
+                });
+                const generateData = await generate.json();
+                console.log('Generate:', generateData);
+
+                resultDiv.innerHTML = `
+                    <h2>✅ Все тесты пройдены!</h2>
+                    <p><strong>Health:</strong> ${healthData.status}</p>
+                    <p><strong>Authors:</strong> ${authorsData.authors?.length || 0} авторов</p>
+                    <p><strong>Generate:</strong> Пост сгенерирован (${generateData.generated_post?.length || 0} символов)</p>
+                `;
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <h2>❌ Ошибка подключения</h2>
+                    <p>${error.message}</p>
+                    <p>Проверьте:</p>
+                    <ul>
+                        <li>Backend запущен на http://localhost:8000</li>
+                        <li>CORS настроен правильно</li>
+                        <li>Нет блокировки в браузере</li>
+                    </ul>
+                `;
+                console.error('Error:', error);
+            }
+        }
+    </script>
+</body>
+</html>
+

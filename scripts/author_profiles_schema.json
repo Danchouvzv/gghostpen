@@ -1,0 +1,164 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GhostPen Author Profiles Schema",
+  "description": "JSON Schema для валидации стилевых профилей авторов",
+  "type": "object",
+  "required": ["version", "generated_at", "profiles"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Версия формата профилей"
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp создания профилей",
+      "format": "date-time"
+    },
+    "profiles": {
+      "type": "array",
+      "description": "Массив стилевых профилей авторов",
+      "items": {
+        "$ref": "#/definitions/AuthorProfile"
+      }
+    }
+  },
+  "definitions": {
+    "AuthorProfile": {
+      "type": "object",
+      "required": ["author_id", "generated_at", "total_posts", "style"],
+      "properties": {
+        "author_id": {
+          "type": "string",
+          "description": "Уникальный идентификатор автора"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "total_posts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "platforms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["linkedin", "instagram", "facebook", "telegram"]
+          }
+        },
+        "style": {
+          "$ref": "#/definitions/StyleMetrics"
+        },
+        "platform_specific": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/PlatformStyle"
+          }
+        },
+        "topics": {
+          "type": "object",
+          "description": "Тематики постов с весами"
+        },
+        "signature_phrases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sample_posts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "StyleMetrics": {
+      "type": "object",
+      "properties": {
+        "avg_post_length": {
+          "type": "integer"
+        },
+        "min_post_length": {
+          "type": "integer"
+        },
+        "max_post_length": {
+          "type": "integer"
+        },
+        "avg_sentence_length": {
+          "type": "number"
+        },
+        "avg_paragraphs_per_post": {
+          "type": "number"
+        },
+        "uses_lists": {
+          "type": "boolean"
+        },
+        "list_frequency": {
+          "type": "number"
+        },
+        "emoji_density": {
+          "type": "number"
+        },
+        "hashtag_density": {
+          "type": "number"
+        },
+        "tone": {
+          "$ref": "#/definitions/Tone"
+        },
+        "emotionality": {
+          "type": "number"
+        },
+        "structure_type": {
+          "type": "string",
+          "enum": ["numbered_lists", "bullet_lists", "paragraphs", "narrative"]
+        }
+      }
+    },
+    "Tone": {
+      "type": "object",
+      "properties": {
+        "formal": {
+          "type": "number"
+        },
+        "emotional": {
+          "type": "number"
+        },
+        "expert": {
+          "type": "number"
+        },
+        "casual": {
+          "type": "number"
+        },
+        "dominant": {
+          "type": "string",
+          "enum": ["formal", "emotional", "expert", "casual"]
+        }
+      }
+    },
+    "PlatformStyle": {
+      "type": "object",
+      "properties": {
+        "post_count": {
+          "type": "integer"
+        },
+        "avg_length": {
+          "type": "integer"
+        },
+        "avg_sentence_length": {
+          "type": "number"
+        },
+        "emoji_density": {
+          "type": "number"
+        },
+        "hashtag_density": {
+          "type": "number"
+        },
+        "tone": {
+          "$ref": "#/definitions/Tone"
+        }
+      }
+    }
+  }
+}
+

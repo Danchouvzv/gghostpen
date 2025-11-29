@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GhostPen Dataset Schema",
+  "description": "JSON Schema для валидации датасета GhostPen",
+  "type": "object",
+  "required": ["version", "generated_at", "authors"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Версия датасета",
+      "pattern": "^\\d+\\.\\d+$"
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp создания датасета",
+      "format": "date-time"
+    },
+    "authors": {
+      "type": "array",
+      "description": "Массив авторов",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/Author"
+      }
+    }
+  },
+  "definitions": {
+    "Author": {
+      "type": "object",
+      "required": ["author_id", "platforms"],
+      "properties": {
+        "author_id": {
+          "type": "string",
+          "description": "Уникальный идентификатор автора",
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "platforms": {
+          "type": "object",
+          "description": "Посты по платформам",
+          "properties": {
+            "linkedin": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Post"
+              }
+            },
+            "instagram": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Post"
+              }
+            },
+            "facebook": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Post"
+              }
+            },
+            "telegram": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Post"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "Post": {
+      "type": "object",
+      "required": ["post_id", "content"],
+      "properties": {
+        "post_id": {
+          "type": "string",
+          "description": "Уникальный идентификатор поста",
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "content": {
+          "type": "string",
+          "description": "Текст поста",
+          "minLength": 20,
+          "maxLength": 10000
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO 8601 timestamp публикации",
+          "format": "date-time"
+        },
+        "meta": {
+          "$ref": "#/definitions/PostMeta"
+        }
+      }
+    },
+    "PostMeta": {
+      "type": "object",
+      "properties": {
+        "hashtags": {
+          "type": "array",
+          "description": "Массив хэштегов",
+          "items": {
+            "type": "string",
+            "pattern": "^#?[a-zA-Z0-9_]+$"
+          }
+        },
+        "mentions": {
+          "type": "array",
+          "description": "Массив упоминаний",
+          "items": {
+            "type": "string",
+            "pattern": "^@?[a-zA-Z0-9_]+$"
+          }
+        },
+        "emojis": {
+          "type": "array",
+          "description": "Массив эмодзи",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
+
