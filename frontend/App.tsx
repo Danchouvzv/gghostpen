@@ -11,12 +11,50 @@ import DebugPanel from './components/DebugPanel';
 import ResultPanel from './components/ResultPanel';
 import AboutPage from './components/AboutPage';
 import LandingPage from './components/LandingPage';
+import LoginPage from './components/LoginPage';
+import RegisterPage from './components/RegisterPage';
+import ProfilePage from './components/ProfilePage';
+import { register as registerUser, getUser } from './services/api';
+import { useLanguage } from './contexts/LanguageContext';
 
-type View = 'landing' | 'playground' | 'about';
+type View = 'landing' | 'playground' | 'about' | 'login' | 'register' | 'profile';
+
+// Language Switcher Component
+const LanguageSwitcher: React.FC = () => {
+  const { language, setLanguage } = useLanguage();
+  
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        onClick={() => setLanguage('ru')}
+        className={`px-2 py-1 text-[10px] font-black border-2 border-black transition-all ${
+          language === 'ru'
+            ? 'bg-[#ccff00] text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+            : 'bg-slate-100 text-black hover:bg-slate-200'
+        }`}
+      >
+        RU
+      </button>
+      <button
+        onClick={() => setLanguage('en')}
+        className={`px-2 py-1 text-[10px] font-black border-2 border-black transition-all ${
+          language === 'en'
+            ? 'bg-[#ccff00] text-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+            : 'bg-slate-100 text-black hover:bg-slate-200'
+        }`}
+      >
+        EN
+      </button>
+    </div>
+  );
+};
 
 function App() {
+  const { t } = useLanguage();
   // --- Navigation State ---
   const [currentView, setCurrentView] = useState<View>('landing');
+  const [currentUser, setCurrentUser] = useState<{ user_id: string; name: string } | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
 
   // --- App Logic State ---
   const [authors, setAuthors] = useState<Author[]>([]);
@@ -30,25 +68,30 @@ function App() {
   const [responseData, setResponseData] = useState<GenerateResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Загружаем авторов с бэкенда при старте
+  // Загружаем авторов с бэкенда при старте и при изменении пользователя
   useEffect(() => {
     const loadAuthors = async () => {
       try {
         setAuthorsLoading(true);
-        const response = await getAuthors();
+        const userId = currentUser?.user_id;
+        console.log('🔍 Загрузка авторов, user_id:', userId);
+        const response = await getAuthors(userId);
+        console.log('📦 Получено авторов:', response.authors?.length || 0);
         // Преобразуем данные из API в формат Author
         const authorsData: Author[] = response.authors.map((author: any) => ({
           id: author.id,
           name: author.name,
           profession: author.profession || '', // Профессия из API
-          role: author.profession ? author.profession : `${author.total_posts} постов`, // Профессия или количество постов
-          avatar: `https://picsum.photos/id/${parseInt(author.id.replace('person_', '')) * 10}/200/200`, // Генерируем аватар
+          role: author.profession ? author.profession : `${author.stats?.total_posts || 0} постов`, // Профессия или количество постов
+          avatar: author.avatar || `https://picsum.photos/id/${parseInt(author.id.replace(/[^0-9]/g, '') || '1') * 10}/200/200`, // Используем аватар из API или генерируем
           samplePosts: author.sample_posts || [], // Используем примеры постов из API
           stats: {
-            formality: author.stats.formality === 'formal' ? 'High' : author.stats.formality === 'emotional' ? 'Medium' : 'Low',
-            avgLength: author.stats.avgLength,
-            emojiDensity: author.stats.emojiDensity
-          }
+            formality: author.stats?.formality === 'formal' ? 'High' : author.stats?.formality === 'emotional' ? 'Medium' : 'Low',
+            avgLength: author.stats?.avgLength || 300,
+            emojiDensity: author.stats?.emojiDensity || 'Low'
+          },
+          is_demo: author.is_demo !== false, // По умолчанию true, если не указано
+          user_id: author.user_id
         }));
         setAuthors(authorsData);
         setAuthorsLoading(false);
@@ -59,6 +102,62 @@ function App() {
     };
 
     loadAuthors();
+  }, [currentUser]);
+
+  // --- Auth Handlers ---
+  const handleRegister = async (name: string, email: string, password: string) => {
+    setAuthLoading(true);
+    try {
+      // Для MVP просто создаём пользователя без пароля (в реальности нужна аутентификация)
+      const result = await registerUser(name, email);
+      const user = await getUser(result.user_id);
+      setCurrentUser({ user_id: result.user_id, name: user.name || name });
+      localStorage.setItem('ghostpen_user_id', result.user_id);
+      setCurrentView('playground');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogin = async (email: string, password: string) => {
+    setAuthLoading(true);
+    try {
+      // Для MVP используем простую логику (в реальности нужна аутентификация)
+      // Пока просто создаём нового пользователя или используем сохранённый ID
+      const savedUserId = localStorage.getItem('ghostpen_user_id');
+      if (savedUserId) {
+        try {
+          const user = await getUser(savedUserId);
+          setCurrentUser({ user_id: savedUserId, name: user.name || 'User' });
+          setCurrentView('playground');
+          return;
+        } catch (e) {
+          // Пользователь не найден, создаём нового
+        }
+      }
+      // Создаём нового пользователя
+      const result = await registerUser('User', email);
+      const user = await getUser(result.user_id);
+      setCurrentUser({ user_id: result.user_id, name: user.name || 'User' });
+      localStorage.setItem('ghostpen_user_id', result.user_id);
+      setCurrentView('playground');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Проверяем сохранённого пользователя при загрузке
+  useEffect(() => {
+    const savedUserId = localStorage.getItem('ghostpen_user_id');
+    if (savedUserId) {
+      getUser(savedUserId)
+        .then(user => {
+          setCurrentUser({ user_id: savedUserId, name: user.name || 'User' });
+        })
+        .catch(() => {
+          localStorage.removeItem('ghostpen_user_id');
+        });
+    }
   }, []);
 
   // --- Handlers ---
@@ -66,12 +165,19 @@ function App() {
     if (!selectedAuthor || !topic) return;
 
     // 1. Build Request
-    const request: GenerateRequest = {
-      author_id: selectedAuthor.id,
-      social_network: selectedNetwork,
-      topic: topic,
-      sample_posts: selectedAuthor.samplePosts
-    };
+    // Если это пользовательский профиль, используем user_id, иначе author_id
+    const request: GenerateRequest = selectedAuthor.user_id
+      ? {
+          user_id: selectedAuthor.user_id,
+          social_network: selectedNetwork,
+          topic: topic,
+        }
+      : {
+          author_id: selectedAuthor.id,
+          social_network: selectedNetwork,
+          topic: topic,
+          sample_posts: selectedAuthor.samplePosts
+        };
 
     setRequestData(request);
     setStatus(AppStatus.LOADING);
@@ -102,6 +208,7 @@ function App() {
     <div className="min-h-screen flex flex-col font-sans text-slate-900 bg-white">
       
       {/* --- Neo-Brutalist Navbar --- */}
+      {currentView !== 'login' && currentView !== 'register' && (
       <header className="fixed top-6 left-1/2 -translate-x-1/2 z-50 w-auto max-w-[95vw]">
         <div className="bg-white rounded-none border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] px-3 md:px-5 h-16 flex items-center gap-3 md:gap-6 transition-transform hover:-translate-y-0.5">
           
@@ -145,9 +252,22 @@ function App() {
           </nav>
 
           <div className="hidden md:flex items-center gap-3 pl-2">
-             <div className="flex items-center gap-1 text-[10px] font-black text-black bg-slate-100 border-2 border-black px-2 py-1 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                <span>EN</span>
-             </div>
+             <LanguageSwitcher />
+             {currentUser ? (
+               <button
+                 onClick={() => setCurrentView('profile')}
+                 className="px-4 py-2 bg-[#ccff00] text-black text-xs font-black uppercase tracking-wide border-2 border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:-translate-y-0.5 transition-all"
+               >
+                 {currentUser.name}
+               </button>
+             ) : (
+               <button
+                 onClick={() => setCurrentView('login')}
+                 className="px-4 py-2 bg-white text-black text-xs font-black uppercase tracking-wide border-2 border-black hover:bg-[#ccff00] hover:-translate-y-0.5 hover:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all"
+               >
+                 {t.nav.login}
+               </button>
+             )}
              <a 
                href="https://github.com/Danchouvzv/gghostpen" 
                target="_blank" 
@@ -159,6 +279,7 @@ function App() {
           </div>
         </div>
       </header>
+      )}
 
       {/* --- Main Content --- */}
       <main className="flex-1 w-full flex flex-col">
@@ -216,6 +337,30 @@ function App() {
 
         {currentView === 'about' && (
           <AboutPage />
+        )}
+
+        {currentView === 'login' && (
+          <LoginPage
+            onLogin={handleLogin}
+            onSwitchToRegister={() => setCurrentView('register')}
+            isLoading={authLoading}
+          />
+        )}
+
+        {currentView === 'register' && (
+          <RegisterPage
+            onRegister={handleRegister}
+            onSwitchToLogin={() => setCurrentView('login')}
+            isLoading={authLoading}
+          />
+        )}
+
+        {currentView === 'profile' && currentUser && (
+          <ProfilePage
+            userId={currentUser.user_id}
+            userName={currentUser.name}
+            onBack={() => setCurrentView('playground')}
+          />
         )}
       </main>
       
