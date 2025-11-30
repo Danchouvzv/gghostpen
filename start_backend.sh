@@ -18,10 +18,16 @@ if [ ! -f "dataset/author_profiles.json" ]; then
     python3 scripts/style_profiler.py dataset/dataset.json dataset/author_profiles.json
 fi
 
+# Загрузка .env файла если есть
+if [ -f "api/.env" ]; then
+    export $(cat api/.env | grep -v '^#' | xargs)
+    echo "✅ .env файл загружен из api/.env"
+fi
+
 # Проверка OpenAI API ключа
 if [ -z "$OPENAI_API_KEY" ]; then
     echo "⚠️  OPENAI_API_KEY не установлен. Используется mock генерация."
-    echo "💡 Для реальной генерации установите: export OPENAI_API_KEY='sk-...'"
+    echo "💡 Для реальной генерации создайте api/.env с OPENAI_API_KEY='sk-...'"
 else
     echo "✅ OpenAI API ключ найден. Используется реальная генерация."
 fi

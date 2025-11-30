@@ -27,3 +27,12 @@ Thumbs.db
 # Dataset (если большой, можно добавить в .gitignore)
 # dataset/dataset.json
 
+# Database
+*.db
+*.sqlite
+*.sqlite3
+ghostpen.db
+api/ghostpen.db
+.env
+*.key
+

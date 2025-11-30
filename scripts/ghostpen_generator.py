@@ -194,9 +194,18 @@ class LLMInterface:
             Сгенерированный текст
         """
         if self.use_mock:
+            print("⚠️ [LLM] Используется MOCK генерация (API ключ не установлен)")
             return self._mock_generate(prompt)
         else:
-            return self._openai_generate(prompt, max_tokens)
+            print(f"✅ [LLM] Используется реальный OpenAI API (ключ: {self.api_key[:10]}...)")
+            try:
+                result = self._openai_generate(prompt, max_tokens)
+                print(f"✅ [LLM] Генерация успешна, длина: {len(result)} символов")
+                return result
+            except Exception as e:
+                print(f"❌ [LLM] Ошибка OpenAI API: {e}")
+                print("⚠️ [LLM] Переключаемся на mock генерацию")
+                return self._mock_generate(prompt)
     
     def _mock_generate(self, prompt: str) -> str:
         """Mock генерация для тестирования - извлекает тему и генерирует текст."""

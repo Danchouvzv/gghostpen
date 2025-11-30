@@ -165,11 +165,20 @@ class PromptBuilder:
         """Строит секцию с примерами постов."""
         sample_posts = profile.get('sample_posts', [])
         if not sample_posts:
+            print(f"⚠️ [PromptBuilder] Нет sample_posts в профиле {profile.get('author_id', 'unknown')}")
             return ""
+        
+        print(f"✅ [PromptBuilder] Используем {len(sample_posts)} примеров постов для {profile.get('author_id', 'unknown')}")
         
         examples_text = "ПРИМЕРЫ ПОСТОВ ЭТОГО АВТОРА:\n\n"
         for i, post in enumerate(sample_posts[:3], 1):
-            examples_text += f"Пример {i}:\n{post}\n\n"
+            # Если post - это словарь, извлекаем content
+            if isinstance(post, dict):
+                post_content = post.get('content', str(post))
+            else:
+                post_content = str(post)
+            examples_text += f"Пример {i}:\n{post_content}\n\n"
+            print(f"   📄 Пример {i} добавлен (длина: {len(post_content)} символов)")
         
         return examples_text.strip()
     
