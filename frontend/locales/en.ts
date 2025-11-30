@@ -100,15 +100,6 @@ export const en = {
     confirmPassword: "Confirm password",
   },
   
-  // Result Panel
-  result: {
-    generated: "Generated post",
-    styleScore: "Style similarity",
-    metrics: "Metrics",
-    copy: "Copy",
-    copied: "Copied!",
-  },
-  
   // Control Panel
   control: {
     persona: "Persona",
