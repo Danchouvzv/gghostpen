@@ -12,6 +12,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 # Rate Limiting (опционально)
@@ -24,13 +25,21 @@ except ImportError:
     RATE_LIMIT_AVAILABLE = False
     print("⚠️ [RATE_LIMIT] slowapi не установлен, rate limiting отключен")
 
-# Загружаем переменные окружения из .env файла
+# Импортируем новые модули
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    print("✅ [ENV] .env файл загружен")
-except ImportError:
-    print("⚠️ [ENV] python-dotenv не установлен, используем системные переменные окружения")
+    from config import settings
+    from logger import get_logger, setup_logging
+    logger = setup_logging()
+    logger.info("🚀 GhostPen API starting...")
+except Exception as e:
+    print(f"⚠️ [CONFIG] Ошибка загрузки конфигурации: {e}")
+    # Fallback на старый способ
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        print("✅ [ENV] .env файл загружен (fallback)")
+    except ImportError:
+        print("⚠️ [ENV] python-dotenv не установлен")
 
 # Добавляем путь к скриптам
 scripts_path = Path(__file__).parent.parent / "scripts"
@@ -40,15 +49,51 @@ from ghostpen_generator import GhostPenGenerator
 from style_scorer import StyleScorer
 from database import Database
 from style_profiler import StyleProfiler
+from auth_routes import router as auth_router
 import json
 import os
 import uuid
+import traceback
 
-app = FastAPI(
-    title="GhostPen API",
-    description="API для генерации постов в авторском стиле",
-    version="1.1.0"
-)
+# Используем настройки из config для создания app
+try:
+    app = FastAPI(
+        title=settings.API_TITLE,
+        description=settings.API_DESCRIPTION,
+        version=settings.API_VERSION
+    )
+    logger.info(f"✅ FastAPI app initialized: {settings.API_TITLE} v{settings.API_VERSION}")
+except:
+    app = FastAPI(
+        title="GhostPen API",
+        description="API для генерации постов в авторском стиле",
+        version="1.1.0"
+    )
+
+# Глобальный обработчик ошибок
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Обработка всех необработанных исключений."""
+    try:
+        logger.error(
+            f"Unhandled exception: {str(exc)}",
+            extra={
+                "path": str(request.url),
+                "method": request.method,
+                "exception_type": type(exc).__name__,
+                "traceback": traceback.format_exc()
+            }
+        )
+    except:
+        pass
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "type": "internal_error"
+        }
+    )
 
 # Rate Limiting (опционально)
 if RATE_LIMIT_AVAILABLE:
@@ -65,9 +110,16 @@ else:
     RATE_LIMIT_ENABLED = False
 
 # CORS для фронтенда
+try:
+    allowed_origins = settings.ALLOWED_ORIGINS
+    logger.info(f"✅ CORS configured for origins: {allowed_origins}")
+except:
+    allowed_origins = ["*"]
+    logger.warning("⚠️ Using default CORS (*) - not recommended for production")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшене указать конкретные домены
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,13 +132,39 @@ scorer: Optional[StyleScorer] = None
 db: Optional[Database] = None
 profiler: Optional[StyleProfiler] = None
 
+# Глобальный экземпляр Database (singleton)
+try:
+    db_path = settings.DATABASE_PATH
+    if 'logger' in globals():
+        logger.info(f"📦 Database path: {db_path}")
+except:
+    db_path = "ghostpen.db"
+    if 'logger' in globals():
+        logger.warning(f"⚠️ Using default database path: {db_path}")
+
+db = Database(db_path)
+
+def get_db() -> Database:
+    """Dependency для получения Database экземпляра."""
+    return db
+
+# Импортируем auth_routes после создания get_db
+from auth_routes import router as auth_router
+
+# Переопределяем get_db в auth_routes модуле
+import auth_routes as auth_routes_module
+auth_routes_module.get_db = get_db
+
+# Подключаем auth routes
+app.include_router(auth_router)
+
 @app.on_event("startup")
 async def startup_event():
     """Инициализация при старте сервера."""
-    global generator, scorer, db, profiler
+    global generator, scorer, profiler
     
-    # Инициализируем БД
-    db = Database()
+    # БД уже инициализирована выше (singleton)
+    logger.info("✅ Database initialized")
     
     # Инициализируем StyleProfiler
     profiler = StyleProfiler()
@@ -142,12 +220,36 @@ async def root():
 
 @app.get("/api/health")
 async def health():
-    """Проверка здоровья сервиса."""
-    return {
+    """Расширенная проверка здоровья сервиса."""
+    health_status = {
         "status": "healthy",
-        "profiles_loaded": generator is not None,
-        "profiles_path": str(PROFILES_PATH)
+        "version": settings.API_VERSION if 'settings' in globals() else "1.1.0",
+        "environment": settings.ENVIRONMENT if 'settings' in globals() else "development",
+        "services": {
+            "database": False,
+            "generator": generator is not None,
+            "profiler": profiler is not None,
+        }
     }
+    
+    # Проверка БД
+    try:
+        if db:
+            test_user = db.get_user("test")
+            health_status["services"]["database"] = True
+    except Exception as e:
+        health_status["services"]["database"] = False
+        health_status["database_error"] = str(e)
+        health_status["status"] = "degraded"
+    
+    # Проверка OpenAI API (если настроен)
+    try:
+        api_key = os.getenv("OPENAI_API_KEY")
+        health_status["services"]["openai_configured"] = api_key is not None and len(api_key) > 0
+    except:
+        health_status["services"]["openai_configured"] = False
+    
+    return health_status
 
 
 @app.get("/api/authors")

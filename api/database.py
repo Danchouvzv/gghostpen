@@ -15,9 +15,21 @@ from datetime import datetime, timezone
 class Database:
     """Управление базой данных GhostPen."""
     
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls, db_path: str = "ghostpen.db"):
+        """Singleton pattern - один экземпляр Database."""
+        if cls._instance is None:
+            cls._instance = super(Database, cls).__new__(cls)
+        return cls._instance
+    
     def __init__(self, db_path: str = "ghostpen.db"):
-        self.db_path = Path(db_path)
-        self.init_db()
+        """Инициализация (вызывается только один раз благодаря singleton)."""
+        if not Database._initialized:
+            self.db_path = Path(db_path)
+            self.init_db()
+            Database._initialized = True
     
     def get_connection(self):
         """Получить соединение с БД."""
@@ -36,8 +48,29 @@ class Database:
                 id TEXT PRIMARY KEY,
                 email TEXT UNIQUE,
                 name TEXT,
+                password_hash TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+        
+        # Миграция: добавляем password_hash если его нет
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        except sqlite3.OperationalError:
+            pass  # Колонка уже существует
+        
+        # Индексы для производительности
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_posts_user_id 
+            ON user_posts(user_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_posts_platform 
+            ON user_posts(platform)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_users_email 
+            ON users(email)
         """)
         
         # Таблица постов пользователей
@@ -70,14 +103,14 @@ class Database:
         conn.close()
     
     # === Users ===
-    def create_user(self, user_id: str, email: Optional[str] = None, name: Optional[str] = None) -> bool:
+    def create_user(self, user_id: str, email: Optional[str] = None, name: Optional[str] = None, password_hash: Optional[str] = None) -> bool:
         """Создать пользователя."""
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO users (id, email, name) VALUES (?, ?, ?)",
-                (user_id, email, name)
+                "INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)",
+                (user_id, email, name, password_hash)
             )
             conn.commit()
             return True
@@ -91,6 +124,15 @@ class Database:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        """Получить пользователя по email."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
         row = cursor.fetchone()
         conn.close()
         return dict(row) if row else None
