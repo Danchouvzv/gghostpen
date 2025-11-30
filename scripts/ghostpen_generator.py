@@ -81,16 +81,15 @@ class PostProcessor:
         return text.strip()
     
     def _adjust_length(self, text: str, target_length: int) -> str:
-        """Корректирует длину текста."""
+        """Улучшенная корректировка длины текста."""
         current_length = len(text)
-        tolerance = target_length * 0.2  # 20% допуск
+        tolerance = target_length * 0.25  # 25% допуск (увеличено)
         
         if current_length < target_length - tolerance:
             # Текст слишком короткий - оставляем как есть
-            # (в реальности можно попросить LLM дополнить)
             return text
         elif current_length > target_length + tolerance:
-            # Текст слишком длинный - обрезаем по последнему предложению
+            # Улучшенное обрезание: по предложениям, сохраняя смысл
             sentences = re.split(r'([.!?]+)', text)
             result = ""
             for i in range(0, len(sentences) - 1, 2):
@@ -99,13 +98,21 @@ class PostProcessor:
                     if len(candidate) <= target_length + tolerance:
                         result = candidate
                     else:
+                        # Если добавление предложения превышает лимит, останавливаемся
                         break
+            
+            # Если результат слишком короткий, берем первые N символов
+            if len(result) < target_length * 0.5:
+                # Обрезаем по словам, чтобы не обрывать слово
+                words = text[:target_length + tolerance].split()
+                result = ' '.join(words[:-1]) if len(words) > 1 else text[:target_length]
+            
             return result if result else text[:target_length]
         
         return text
     
     def _remove_repetitions(self, text: str) -> str:
-        """Убирает явные повторы фраз."""
+        """Улучшенное удаление повторов фраз."""
         sentences = re.split(r'([.!?]+)', text)
         result = []
         seen_phrases = set()
@@ -113,14 +120,34 @@ class PostProcessor:
         for i in range(0, len(sentences) - 1, 2):
             if i + 1 < len(sentences):
                 sentence = (sentences[i] + sentences[i + 1]).strip()
-                # Простая проверка на повторы (можно улучшить)
-                words = sentence.lower().split()[:5]  # Первые 5 слов
-                phrase_key = ' '.join(words)
-                if phrase_key not in seen_phrases or len(sentence) < 20:
+                if not sentence:
+                    continue
+                
+                # Улучшенная проверка на повторы
+                words = sentence.lower().split()
+                if len(words) < 3:  # Слишком короткие предложения пропускаем
                     result.append(sentence)
-                    seen_phrases.add(phrase_key)
+                    continue
+                
+                # Проверяем первые 6 слов и последние 3
+                phrase_key_start = ' '.join(words[:6])
+                phrase_key_end = ' '.join(words[-3:]) if len(words) > 3 else ''
+                
+                # Проверяем на похожесть (не точное совпадение)
+                is_repetition = False
+                for seen in seen_phrases:
+                    if phrase_key_start in seen or seen in phrase_key_start:
+                        if len(sentence) > 30:  # Длинные предложения проверяем строже
+                            is_repetition = True
+                            break
+                
+                if not is_repetition:
+                    result.append(sentence)
+                    seen_phrases.add(phrase_key_start)
+                    if phrase_key_end:
+                        seen_phrases.add(phrase_key_end)
         
-        return ' '.join(result)
+        return ' '.join(result) if result else text
     
     def _adjust_emojis(self, text: str, target_density: float) -> str:
         """Корректирует количество эмодзи."""

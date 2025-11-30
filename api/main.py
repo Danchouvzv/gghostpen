@@ -10,9 +10,19 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+# Rate Limiting (опционально)
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    RATE_LIMIT_AVAILABLE = True
+except ImportError:
+    RATE_LIMIT_AVAILABLE = False
+    print("⚠️ [RATE_LIMIT] slowapi не установлен, rate limiting отключен")
 
 # Загружаем переменные окружения из .env файла
 try:
@@ -37,8 +47,22 @@ import uuid
 app = FastAPI(
     title="GhostPen API",
     description="API для генерации постов в авторском стиле",
-    version="1.0.0"
+    version="1.1.0"
 )
+
+# Rate Limiting (опционально)
+if RATE_LIMIT_AVAILABLE:
+    try:
+        limiter = Limiter(key_func=get_remote_address)
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        RATE_LIMIT_ENABLED = True
+        print("✅ [RATE_LIMIT] Rate limiting активирован (10 запросов/минуту)")
+    except Exception as e:
+        print(f"⚠️ [RATE_LIMIT] Rate limiting не активирован: {e}")
+        RATE_LIMIT_ENABLED = False
+else:
+    RATE_LIMIT_ENABLED = False
 
 # CORS для фронтенда
 app.add_middleware(
@@ -68,14 +92,15 @@ async def startup_event():
     profiler = StyleProfiler()
     
     if not PROFILES_PATH.exists():
-        print(f"⚠️  Профили не найдены: {PROFILES_PATH}")
+        print(f"ℹ️  Демо-профили не найдены: {PROFILES_PATH}")
+        print(f"   Система будет работать только с персональными профилями пользователей из БД")
     else:
-        # Инициализируем генератор для демо-авторов
+        # Инициализируем генератор для демо-авторов (опционально)
         # Для реальной работы передайте OPENAI_API_KEY через переменную окружения
         api_key = os.getenv("OPENAI_API_KEY")  # None = mock режим
         generator = GhostPenGenerator(PROFILES_PATH, api_key)
         scorer = StyleScorer()
-        print(f"✅ GhostPen API запущен. Профили загружены из {PROFILES_PATH}")
+        print(f"✅ GhostPen API запущен. Демо-профили загружены из {PROFILES_PATH}")
 
 
 # Pydantic модели для запросов/ответов
@@ -131,7 +156,7 @@ async def get_authors(user_id: Optional[str] = None):
     print(f"📥 [API] Запрос авторов, user_id: {user_id}")
     authors = []
     
-    # Добавляем демо-авторов
+    # Добавляем демо-авторов (опционально, только если файл существует)
     if PROFILES_PATH.exists():
         # Маппинг имен и профессий для авторов
         author_info = {
@@ -262,58 +287,85 @@ async def get_authors(user_id: Optional[str] = None):
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
-async def generate_post(request: GenerateRequest):
+async def generate_post(request_data: GenerateRequest):
     """
     Генерирует пост в стиле автора.
     
     Args:
-        request: Запрос с параметрами генерации
+        request: FastAPI Request объект
+        request_data: Запрос с параметрами генерации
         
     Returns:
         Сгенерированный пост с метриками
     """
-    if generator is None or scorer is None:
-        raise HTTPException(status_code=500, detail="Генератор не инициализирован")
+    # Улучшенная валидация входных данных
+    if not request_data.topic or len(request_data.topic.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Тема поста слишком короткая (минимум 3 символа)")
+    
+    if len(request_data.topic) > 500:
+        raise HTTPException(status_code=400, detail="Тема поста слишком длинная (максимум 500 символов)")
     
     # Валидация платформы
     valid_platforms = ['linkedin', 'instagram', 'facebook', 'telegram']
-    if request.social_network not in valid_platforms:
+    if request_data.social_network not in valid_platforms:
         raise HTTPException(
             status_code=400,
             detail=f"Неподдерживаемая платформа. Доступны: {', '.join(valid_platforms)}"
+        )
+    
+    # Проверка инициализации (только для демо-авторов)
+    if request_data.author_id and (generator is None or scorer is None):
+        raise HTTPException(
+            status_code=500, 
+            detail="Генератор не инициализирован. Проверьте наличие dataset/author_profiles.json"
         )
     
     start_time = time.time()
     
     try:
         # Определяем, используем ли мы user_id или author_id
-        if request.user_id:
+        if request_data.user_id:
             # Работа с персональным профилем пользователя
-            user_profile = db.get_profile(request.user_id)
+            user_profile = db.get_profile(request_data.user_id)
             if not user_profile:
                 raise HTTPException(status_code=404, detail="Профиль пользователя не найден. Используйте /rebuild-profile")
             
-            # Создаём временный генератор с профилем пользователя
+            # Оптимизированная работа с временными файлами
             import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
+            import atexit
+            
+            # Создаём временный файл с профилем пользователя
+            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8')
+            temp_path = Path(temp_file.name)
+            
+            try:
                 temp_profile = {
                     "version": "1.0",
                     "profiles": [user_profile]
                 }
-                json.dump(temp_profile, f, ensure_ascii=False)
-                temp_path = Path(f.name)  # Преобразуем в Path объект
-            
-            api_key = os.getenv("OPENAI_API_KEY")
-            print(f"🔑 [GENERATE] Проверка API ключа:")
-            print(f"   - OPENAI_API_KEY в окружении: {'есть' if api_key else 'НЕТ'}")
-            if api_key:
-                print(f"   - Длина ключа: {len(api_key)} символов")
-                print(f"   - Первые 10 символов: {api_key[:10]}...")
-                print(f"   - Начинается с 'sk-': {api_key.startswith('sk-')}")
-            else:
-                print(f"   ⚠️ API ключ НЕ установлен - будет использоваться MOCK генерация")
-            user_generator = GhostPenGenerator(temp_path, api_key)
-            user_scorer = StyleScorer()
+                json.dump(temp_profile, temp_file, ensure_ascii=False)
+                temp_file.close()
+                
+                # Регистрируем удаление файла при выходе
+                atexit.register(lambda: temp_path.unlink() if temp_path.exists() else None)
+                
+                api_key = os.getenv("OPENAI_API_KEY")
+                print(f"🔑 [GENERATE] Проверка API ключа:")
+                print(f"   - OPENAI_API_KEY в окружении: {'есть' if api_key else 'НЕТ'}")
+                if api_key:
+                    print(f"   - Длина ключа: {len(api_key)} символов")
+                    print(f"   - Первые 10 символов: {api_key[:10]}...")
+                    print(f"   - Начинается с 'sk-': {api_key.startswith('sk-')}")
+                else:
+                    print(f"   ⚠️ API ключ НЕ установлен - будет использоваться MOCK генерация")
+                
+                user_generator = GhostPenGenerator(temp_path, api_key)
+                user_scorer = StyleScorer()
+            except Exception as e:
+                # Удаляем временный файл в случае ошибки
+                if temp_path.exists():
+                    temp_path.unlink()
+                raise
             
             # Логируем информацию о профиле пользователя
             sample_posts_count = len(user_profile.get('sample_posts', []))
@@ -336,83 +388,91 @@ async def generate_post(request: GenerateRequest):
             print(f"   - Доминирующий тон: {tone.get('dominant', 'N/A')}")
             print(f"   - Характерных фраз: {len(user_profile.get('signature_phrases', []))}")
             
-            result = user_generator.generate_post(
-                author_id=user_profile['author_id'],
-                platform=request.social_network,
-                topic=request.topic,
-                additional_context=None
-            )
-            
-            # Логируем промпт, который был использован
-            if 'prompt_used' in result:
-                prompt = result['prompt_used']
-                if 'ПРИМЕРЫ ПОСТОВ' in prompt:
-                    print(f"✅ [GENERATE] Промпт содержит раздел 'ПРИМЕРЫ ПОСТОВ' - ваши посты используются!")
-                    # Извлекаем секцию с примерами
-                    examples_start = prompt.find('ПРИМЕРЫ ПОСТОВ')
-                    if examples_start != -1:
-                        examples_end = prompt.find('\n\nТРЕБОВАНИЯ ПЛАТФОРМЫ:', examples_start)
-                        if examples_end == -1:
-                            examples_end = prompt.find('\n\nТЕМА ПОСТА:', examples_start)
-                        if examples_end != -1:
-                            examples_section = prompt[examples_start:examples_end]
-                            print(f"📄 [GENERATE] Секция с примерами (первые 300 символов):")
-                            print(f"   {examples_section[:300]}...")
-                else:
-                    print(f"⚠️ [GENERATE] Промпт НЕ содержит 'ПРИМЕРЫ ПОСТОВ' - проверьте sample_posts")
-                    print(f"📄 [GENERATE] Промпт (первые 500 символов):")
-                    print(f"   {prompt[:500]}...")
-            
-            similarity_scores = user_scorer.score(
-                result['generated_post'],
-                user_profile,
-                request.social_network
-            )
-            
-            # Удаляем временный файл
-            os.unlink(str(temp_path))
+            try:
+                result = user_generator.generate_post(
+                    author_id=user_profile['author_id'],
+                    platform=request_data.social_network,
+                    topic=request_data.topic,
+                    additional_context=None
+                )
+                
+                # Логируем промпт, который был использован
+                if 'prompt_used' in result:
+                    prompt = result['prompt_used']
+                    if 'ПРИМЕРЫ ПОСТОВ' in prompt:
+                        print(f"✅ [GENERATE] Промпт содержит раздел 'ПРИМЕРЫ ПОСТОВ' - ваши посты используются!")
+                        # Извлекаем секцию с примерами
+                        examples_start = prompt.find('ПРИМЕРЫ ПОСТОВ')
+                        if examples_start != -1:
+                            examples_end = prompt.find('\n\nТРЕБОВАНИЯ ПЛАТФОРМЫ:', examples_start)
+                            if examples_end == -1:
+                                examples_end = prompt.find('\n\nТЕМА ПОСТА:', examples_start)
+                            if examples_end != -1:
+                                examples_section = prompt[examples_start:examples_end]
+                                print(f"📄 [GENERATE] Секция с примерами (первые 300 символов):")
+                                print(f"   {examples_section[:300]}...")
+                    else:
+                        print(f"⚠️ [GENERATE] Промпт НЕ содержит 'ПРИМЕРЫ ПОСТОВ' - проверьте sample_posts")
+                        print(f"📄 [GENERATE] Промпт (первые 500 символов):")
+                        print(f"   {prompt[:500]}...")
+                
+                similarity_scores = user_scorer.score(
+                    result['generated_post'],
+                    user_profile,
+                    request_data.social_network
+                )
+            finally:
+                # Удаляем временный файл после использования
+                if temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                        print(f"🗑️ [GENERATE] Временный файл удалён: {temp_path}")
+                    except Exception as e:
+                        print(f"⚠️ [GENERATE] Не удалось удалить временный файл: {e}")
             
         else:
             # Работа с демо-авторами
-            if not request.author_id:
+            if not request_data.author_id:
                 raise HTTPException(status_code=400, detail="Укажите author_id или user_id")
             
             if generator is None:
                 raise HTTPException(status_code=500, detail="Генератор не инициализирован")
             
             result = generator.generate_post(
-                author_id=request.author_id,
-                platform=request.social_network,
-                topic=request.topic,
+                author_id=request_data.author_id,
+                platform=request_data.social_network,
+                topic=request_data.topic,
                 additional_context=None
             )
             
             # Получаем профиль для оценки
-            profile = generator.prompt_builder.profiles.get(request.author_id)
+            profile = generator.prompt_builder.profiles.get(request_data.author_id)
             if not profile:
-                raise HTTPException(status_code=404, detail=f"Автор {request.author_id} не найден")
+                raise HTTPException(status_code=404, detail=f"Автор {request_data.author_id} не найден")
             
             # Оцениваем стилевое сходство
             similarity_scores = scorer.score(
                 result['generated_post'],
                 profile,
-                request.social_network
+                request_data.social_network
             )
         
         processing_time = int((time.time() - start_time) * 1000)
         
-        # Подсчитываем примерное количество токенов в промпте
-        prompt_tokens = len(result.get('prompt_used', '').split()) * 1.3  # Примерная оценка
+        # Улучшенный подсчет токенов (более точная оценка)
+        prompt_text = result.get('prompt_used', '')
+        # Примерная оценка: 1 токен ≈ 0.75 слова для русского языка
+        prompt_tokens = int(len(prompt_text.split()) * 0.75)
         
         # Формируем ответ в формате, ожидаемом фронтендом
         response = GenerateResponse(
             generated_post=result['generated_post'],
-            style_similarity=round(similarity_scores['overall_score'], 2),
+            style_similarity=round(similarity_scores.get('overall_score', 0.7), 2),
             debug=DebugInfo(
-                target_length=result['metrics']['target_length'],
-                model_version="ghostpen-v1.0",
+                target_length=result.get('metrics', {}).get('target_length', 300),
+                model_version="ghostpen-v1.1-enhanced",
                 processing_time_ms=processing_time,
-                prompt_tokens=int(prompt_tokens)
+                prompt_tokens=prompt_tokens
             )
         )
         
@@ -420,8 +480,22 @@ async def generate_post(request: GenerateRequest):
         
     except HTTPException:
         raise
+    except ValueError as e:
+        # Валидационные ошибки
+        raise HTTPException(status_code=400, detail=f"Ошибка валидации: {str(e)}")
+    except FileNotFoundError as e:
+        # Ошибки файлов
+        raise HTTPException(status_code=404, detail=f"Файл не найден: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
+        # Общие ошибки с улучшенным логированием
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ [GENERATE] Критическая ошибка: {str(e)}")
+        print(f"📋 [GENERATE] Traceback:\n{error_trace}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Ошибка генерации: {str(e)}"
+        )
 
 
 # === User Management ===

@@ -58,6 +58,7 @@ class PromptBuilder:
             profiles_path: Путь к файлу с профилями авторов
         """
         self.profiles = {}
+        self._prompt_cache = {}  # Кэш промптов для оптимизации
         if profiles_path and profiles_path.exists():
             self.load_profiles(profiles_path)
     
@@ -73,7 +74,8 @@ class PromptBuilder:
         author_id: str,
         platform: str,
         topic: str,
-        additional_context: Optional[str] = None
+        additional_context: Optional[str] = None,
+        use_cache: bool = True
     ) -> str:
         """
         Строит промпт для генерации поста.
@@ -87,6 +89,11 @@ class PromptBuilder:
         Returns:
             Готовый промпт для LLM
         """
+        # Проверка кэша (только для одинаковых запросов без дополнительного контекста)
+        cache_key = f"{author_id}:{platform}:{topic}" if use_cache and not additional_context else None
+        if cache_key and cache_key in self._prompt_cache:
+            return self._prompt_cache[cache_key]
+        
         if author_id not in self.profiles:
             raise ValueError(f"Профиль автора {author_id} не найден")
         
@@ -114,7 +121,18 @@ class PromptBuilder:
         # 6. Требования к формату
         prompt_parts.append(self._build_format_requirements(profile, platform))
         
-        return "\n\n".join(prompt_parts)
+        prompt = "\n\n".join(prompt_parts)
+        
+        # Кэшируем промпт
+        if cache_key:
+            self._prompt_cache[cache_key] = prompt
+            # Ограничиваем размер кэша (максимум 100 промптов)
+            if len(self._prompt_cache) > 100:
+                # Удаляем самый старый (FIFO)
+                oldest_key = next(iter(self._prompt_cache))
+                del self._prompt_cache[oldest_key]
+        
+        return prompt
     
     def _build_main_instruction(self, profile: Dict, platform: str, topic: str) -> str:
         """Строит основную инструкцию."""
